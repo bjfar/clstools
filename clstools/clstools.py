@@ -67,10 +67,12 @@ def extrap1d(interpolator):
         else:
             return interpolator(x)
 
-    def ufunclike(xs):
-        return np.array(map(pointwise, np.array(xs)))
+    #def ufunclike(xs):
+    #    return np.array(map(pointwise, np.array(xs)))
+    vfunc = np.vectorize(pointwise)  #seems slow, but the other way didn't seem to work...
 
-    return ufunclike
+    #return ufunclike
+    return vfunc
 
 # Count the number of unique items in an array
 def count_unique(keys):
@@ -104,9 +106,14 @@ numpy where
       print sorti
       print coords[getmask,unevenaxis][sorti]
       print zvals[getmask][sorti]
-      ifunc = extrap1d(interp.interp1d(coords[getmask,unevenaxis][sorti],
+      #ifunc = extrap1d(interp.interp1d(coords[getmask,unevenaxis][sorti],
+      #                                  zvals[getmask][sorti],
+      #                                  bounds_error=False,fill_value=0))
+      # I don't think there is any need for extrap?
+      ifunc = interp.interp1d(coords[getmask,unevenaxis][sorti],
                                         zvals[getmask][sorti],
-                                        bounds_error=False,fill_value=0))
+                                        bounds_error=False,fill_value=0)
+ 
       # resample data to regular grid in requested direction
       evencoords += [np.median(coords[getmask,evenaxis])]
       resampled += [ifunc(gridXYvals[unevenaxis])]
@@ -119,7 +126,8 @@ numpy where
       print evencoords
       print row
       print len(evencoords), len(row)
-      row_ifunc = extrap1d(interp.interp1d(evencoords,row,bounds_error=False,fill_value=0))
+      #row_ifunc = extrap1d(interp.interp1d(evencoords,row,bounds_error=False,fill_value=0))
+      row_ifunc = interp.interp1d(evencoords,row,bounds_error=False,fill_value=0)
       row_resampled += [row_ifunc(gridXYvals[evenaxis])]
    
    #output grid
@@ -136,7 +144,7 @@ def qcomb(mu1,s1,mu2,s2,rho):
 rv = norm() #standard normal
 def CLs(qobs,MAGqA):
     """This makes the assumption that q_s+b and q_b have the same variance!
-    Otherwise the psb and pv values need slightly different qobs and qA values.
+    Otherwise the psb and pb values need slightly different qobs and qA values.
     As a result, qA_s+b = -qA_b, so the MAGNITUDE should be supplied here. We
     will take the absolute value anyway to make sure."""
     qA = np.abs(MAGqA)
@@ -144,45 +152,138 @@ def CLs(qobs,MAGqA):
     pb  =     rv.cdf(0.5*(qobs - qA)/np.sqrt(qA)) 
     return psb/(1-pb)
 
+def CLs_2(qobs,qAsb,qAb):
+    """As above but doesn't make the small signal approximation"""
+    psb = 1 - rv.cdf( 0.5*(qobs - qAsb)/np.sqrt(np.abs(qAsb)) ) 
+    pb  =     rv.cdf( 0.5*(qobs - qAb)/np.sqrt(np.abs(qAb))   ) 
+    return psb/(1-pb)
 
-def CLs_asymp(n,s,b,sigb,fsigs):
+def CLs_asymp(n,s,b,sigb=None,fsigs=0.,returnextra=False):
     """Obtain CLs values for test signal hypotheses using asymptotic approximations
     n - number of signal candidates observed
     s - predicted mean number of signal events
     sigb - standard devitation of background (in units of event number)
-    fsigs - standard deviation of predicted signal (as fraction of s)
+      (i.e. includes the poisson uncertainty: sigb**2 = b + sig_extra**2) 
+    fsigs - standard deviation of signal rate (as fraction of s)
+      (i.e. does not include poisson uncertainty; is just uncertainty on signal prediction)
     """
     #b = self.b
     #sigb = b*self.bstat
     #fsigs = self.ssys
     #print s
     #print sigb
+
+    #if no background standard deviation provided, assume poisson only
+    if sigb==None: sigb = np.sqrt(b)
     
-    mu = (n-b)/s
-    sigmusb = np.sqrt(1*s + (1*s*fsigs)**2 + sigb**2)/s  #mu'=1
-    sigmub = np.sqrt(0*s + (0*s*fsigs)**2 + sigb**2)/s   #mu'=0
-    #print sigmub
-    # Determine number of "sigmas" the observation is above the background:
-    #print "significance (units of sigma_b) = ", (mu/sigmub)[0]
-    
-    q1sb = (1-2*mu)/sigmusb**2
-    q1b  = (1-2*mu)/sigmub**2
-    q1Asb = -1/sigmusb**2   #mu'=1 (sign doesn't actually matter, gets killed by abs)
-    q1Ab  = +1/sigmub**2   #mu'=0 (sigmusb~sigmub so q1Asb ~ -q1Ab)
-    
-    sigqsb = 2/sigmusb
-    sigqb = 2/sigmub
-    
-    obsCLs = CLs(q1sb,q1Asb)  # CLs function assumes q1Asb = -q1Ab
-    expCLs = CLs(q1Ab,q1Asb)  # median (expected) values of CLs
-    expCLsapprox = 2*( 1-rv.cdf(sqrm(q1Asb)) )  #should exactly equal expCLs since 
+    ## mu = (n-b)/s  # Maximum likelihood estimator for mu, i.e. \hat{\mu}
+    ## sigmusb = np.sqrt(1*s + (1*s*fsigs)**2 + sigb**2)/s  #mu'=1
+    ## sigmub = np.sqrt(0*s + (0*s*fsigs)**2 + sigb**2)/s   #mu'=0
+    ## #print sigmub
+    ## # Determine number of "sigmas" the observation is above the background:
+    ## #print "significance (units of sigma_b) = ", (mu/sigmub)[0]
+    ## 
+    ## q1sb = (1-2*mu)/sigmusb**2
+    ## q1b  = (1-2*mu)/sigmub**2
+    ##
+    ## q1Asb = -1/sigmusb**2   #mu'=1 (sign doesn't actually matter, gets killed by abs)
+    ## q1Ab  = +1/sigmub**2   #mu'=0 (sigmusb~sigmub so q1Asb ~ -q1Ab)
+    ## 
+    ## sigqsb = 2/sigmusb
+    ## sigqb = 2/sigmub
+    ## 
+    ## obsCLs = CLs(q1sb,q1Asb)  # CLs function assumes q1Asb = -q1Ab
+    ## expCLs = CLs(q1Ab,q1Asb)  # median (expected) values of CLs
+   
+    # hmm I'm a little confused about that... seems to work fine, but value of
+    # q should not depend on mu hypothesis. Should just come from likelihood, which
+    # is here assumed to be
+    # -2*log(L_{s+b}/L_{b})
+    #  = -2*[  n*log(s+b) - (s+b) - n!
+    #        - n*log(b) + b + n! ]
+    #  = -2*[ n*log((s+b)/b) - s ]
+    # Might make more sense to work in a different order. Try this:
+    # (this way definitely ignores systematics, but I am not sure that they were treated
+    # correctly the other way anyhow. Might need to rethink how to include those properly.
+    # (i.e. profile or marginalise likelihood I guess)
+    # For now just use simulator.cpp for this and do it numerically)
+
+    ## # raw Poisson q (no systematics)
+    ## def q0(n): 
+    ##    return -2*(n*np.log((s+b)/b) - s)
+
+    # q in Gaussian limit, marginalised over systematics.
+    def q(n):
+       var_sb = s + (s*fsigs)**2 + sigb**2   
+       var_b  = sigb**2
+       chi2sb = (n - (s+b))**2/var_sb 
+       chi2b  = (n - b)**2/var_b
+       return chi2sb - chi2b # + np.log(var_sb/var_b) # last term seems to be causing problems at low s, not totally sure why. Removing it gives excellent match to the raw Poisson formula in absence of systematics...
+    # Seems to match simulator.cpp results quite nicely, for large number of counts anyway
+    # Same sort of trick should apply to the correlated case
+
+    qobs = q(n)
+    qAsb = q(s+b)
+    qAb  = q(b)
+  
+    obsCLs = CLs_2(qobs,qAsb,qAb)
+    expCLs = CLs_2(qAb, qAsb,qAb)
+
+    ## expCLsapprox = 2*( 1-rv.cdf(sqrm(q1Asb)) )  #should exactly equal expCLs since 
                               # it simply makes analytic use of q1obs = q1Ab
     
-    psb = 1 - rv.cdf( (q1sb+1/sigmusb**2)/(2/sigmusb) ) 
-    pb  =     rv.cdf( (q1b -1/sigmub**2 )/(2/sigmub ) )
-    obsCLsexact = psb/(1-pb)  # does not assume q1Asb ~ -q1Ab
-    #print "obsCLs, obsCLsexact", obsCLs, obsCLsexact 
+    ## psb = 1 - rv.cdf( (q1sb+1/sigmusb**2)/(2/sigmusb) ) 
+    ## pb  =     rv.cdf( (q1b -1/sigmub**2 )/(2/sigmub ) )
+    ## obsCLsexact = psb/(1-pb)  # does not assume q1Asb ~ -q1Ab
+    #print "obsCLs, obsCLsexact", obsCLs, obsCLsexact i
+
+    ## print 'mu=',mu
+    ## print 's=',s
+    ## print 'fsigs=',fsigs
+    ## print 'sigb=',sigb
+    ## print 'sigmusb',sigmusb
+    ## print 'sigmub',sigmub
+    ## print 'q1Asb',q1Asb
+    ## print 'q1Ab',q1Ab
+    ## print 'sigqsb',sigqsb
+    ## print 'sigqb',sigqb
+
+    if returnextra:
+       return obsCLs, expCLs, qobs, qAsb, qAb #, sigqsb, sigqb
     return obsCLs      
+
+# Note: according to the above approximations, the test statistic QCLs should be
+# distributed as a Gaussian with mean = (1-2*mu)/sigma**2 and variance = 4/sigma**2
+# (arXiv: 1007.1727 eq. 73,74)
+
+def CLs_corr(a1,a2,s1,s2,rho):
+   """Computes combined CLs values for two experiments with corellated event counts (ignores systematics!)
+      a1 - experiment 1
+      a2 - experiment 2
+      s1 - predicted signal in a1
+      s2 - predicted signal in a2
+      rho - linear correlation coefficient
+   """
+   mu1 = (a1.o - a1.b)/s1
+   mu2 = (a2.o - a2.b)/s2  
+   sig1 = np.sqrt(1*s1 + a1.b)/s1 # + (1*s*fsigs)**2 + sigb**2)/s  #mu'=1
+   sig2 = np.sqrt(1*s2 + a2.b)/s2 # " " 
+   
+   qobs = qcomb(mu1,sig1,mu2,sig2,rho)
+   qAsb = qcomb(1,sig1,1,sig2,rho)
+   qAb  = qcomb(0,sig1,0,sig2,rho)
+
+   obsCLs = CLs(qobs,qAsb)  # CLs function assumes q1Asb = -q1Ab
+   expCLs = CLs(qAb,qAsb)   # median (expected) values of CLs
+   
+   qAbp = qcomb( sig1,sig1, sig2,sig2,rho)
+   qAbm = qcomb(-sig1,sig1,-sig2,sig2,rho)
+
+   #+/- 1 sigma
+   expCLsp = CLs(qAbp,qAsb)
+   expCLsm = CLs(qAbm,qAsb)
+
+   return obsCLs,expCLs,expCLsp,expCLsm
 
 
 #=======================================================================
@@ -193,7 +294,7 @@ class Experiment:
 
    # Initialisation   
 
-   def __init__(self,name,o,ssys,b,bsys,bstat=0,sK=1,outdir=''):
+   def __init__(self,name,o,ssys,b,bsys=0.,bstat=None,sK=1,outdir='',obslim=None,explim=None):
       # Identifier
       self.name = name
       # Directory to store results
@@ -206,12 +307,15 @@ class Experiment:
       self.sK = sK
       # Expected number of background counts
       self.b = b
-      # Gaussian statistical uncertainty on background yield (from monte carlo, limited control regions, etc.)
-      self.bsys = bsys
+      # Gaussian statistical uncertainty on background yield (from monte carlo, limited control regions, etc.). If none provided, assume Poisson (asymptotic)
+      if bstat==None:
+         self.bstat = np.sqrt(b)/b #still fractional
+      else:
+         self.bstat = bstat
       # Gaussian systematic uncertainty on background yield (fractional)
-      self.bstat = bstat
+      self.bsys = bsys
       # Total background uncertainty
-      self.bsystot = np.sqrt(bsys**2 + bstat**2)
+      self.bsystot = np.sqrt(self.bsys**2 + self.bstat**2)
       # Background +/-1 sigma counts
       self.bp1 = np.round(b + b*self.bsystot)
       self.bm1 = np.round(b - b*self.bsystot)
@@ -220,6 +324,10 @@ class Experiment:
                   'b-1sig':('b', self.bm1),
                   'b' :    ('k', self.b),
                   'b+1sig':('g', self.bp1)}
+
+      # Observed and expected limits reported by actual experiment; used to tune uncertainty parameters to reproduce the correct limits.
+      self.obslim = obslim
+      self.explim = explim
 
    # Analysis tools
 
@@ -397,7 +505,7 @@ class Experiment:
        return r -  minchi2[n], r     #second part of tuple records the fitted parameter values 
 
    #CLs test statistic
-   def QCLs(self,n,s,chi2B=None):
+   def QCLs_prof(self,n,s,chi2B=None):
       """
       Compute the value of the test statistic:
                       /  L(n, mu=1, nuis) \
@@ -414,7 +522,26 @@ class Experiment:
          chi2B = self.getprofchi2(n,0)[2]
       return (chi2SB-chi2B, chi2B)
 
-   def getCL(self,fname,n,svals=None,regen='ifNone',method='marg',N=2000,regenQdist='ifNone',simall=50):
+   #CLs test statistic (no profiling; this is what is used in simulator.cpp (at time of writing this...))
+   def QCLs(self,n,s,chi2B=None):
+      """
+      Compute the value of the test statistic:
+                      /  L(n, mu=1) \
+      Q(n) = - 2 * ln | ----------- |
+                      \  L(n, mu=0) /
+      where nuisance parameters are assumed to adopt their expected values
+      """
+      
+      chi2SB = -2*self.likefunc(n,s,0,0)
+
+      # chi2B only varies with n, so to save time a previously computed value may be supplied
+      if chi2B == None:
+         chi2B = -2*self.likefunc(n,0,0,0)
+
+      return (chi2SB-chi2B, chi2B)
+
+
+   def getCL(self,fname,n,svals=None,regen='ifNone',method='marg',N=2000,regenQdist='ifNone',simall=True,savedata=True):
       """Generate CLs or CLsb data
 
       Determine how CLs related values vary with analysis parameters
@@ -427,6 +554,7 @@ class Experiment:
       method - which method to use to compute the p values
       simall - True or number: auxilliary flag for 'simulate' method. If not True, only simulates CLs test statistic distributions for small signal+background hypotheses, and uses asymptotic approximation otherwise. The change point is the number set in this flag.
       N - number of pseudoexperiments to run (valid for 'simulate' method only)
+      savedate - Whether to store results for the future. For tuning limits it is useful to set this to False to avoid erasing old data.
       """
       if method=='asymptotic':
          #-----------------------------------------------------------------------------------
@@ -434,15 +562,18 @@ class Experiment:
          #------------------------------------------------------------------------------------
          CLs = CLs_asymp(n,svals,self.b,self.b*self.bsystot,self.ssys) 
          return (CLs,svals)
-      
+ 
       elif method=='simulate':
          #------------------------------------------------------------------------------
          # Computes CLs values using simulated distributions for the test statistic
          #------------------------------------------------------------------------------i
          
          def write2pkl(Qdists):
-             with open(self.outdir+"/"+self.name+"-Qdists_N={0}.pkl".format(N),'w') as f:
-                 p.dump(Qdists,f)
+             if savedata==True:
+                 with open(self.outdir+"/"+self.name+"-Qdists_N={0}.pkl".format(N),'w') as f:
+                     p.dump(Qdists,f)
+             else:
+                 print "Warning! Not saving results of test statistic distribution simulations!"
  
          def getQdists(svals_v):
              # Get distributions of Q, for given s, from file if we have them, else generate them
@@ -518,8 +649,9 @@ class Experiment:
                 tosim = np.where( svals+self.b <= simall ) #simulate for these values
                 notsim = np.where( svals+self.b > simall ) #do not simulate for these values
              else:
-                tosim = np.ones(len(svals),dtype=np.bool) #simulate everything
-                notsim = np.zeros(len(svals),dtype=np.bool)
+                # stick inside tuple to match results of np.where
+                tosim = (np.arange(len(svals),dtype=np.int),) #simulate everything
+                notsim = (np.array([],dtype=np.int),)
 
              #print "Simulating {0} hypotheses...".format(len(tosim[0]))
 
@@ -536,17 +668,21 @@ class Experiment:
                  # < and <= chosen to produce conservative CLs value.
                  psb = sum([pi for qi,pi in zip(QSBvals,QSBfreq) if Qobs<qi])
                  pb  = sum([pi for qi,pi in zip(QBvals, QBfreq)  if qi<=Qobs])
-               
+
                  # Deal with divide by zero situation
                  if pb==1.: CLs[i] = 0.   
                  else: CLs[i] = psb/(1.-pb)
 
              # Use asymptotic approximations for the rest
-             CLs[notsim] = CLs_asymp(n,svals[notsim],self.b,self.b*self.bsystot,self.ssys)       
- 
+             if len(svals[notsim])!=0:
+                 CLs[notsim] = CLs_asymp(n,svals[notsim],self.b,self.b*self.bsystot,self.ssys)       
+             
              #Write results to file
-             with open(fname+"sim",'w') as f:   #save them in a file identified by the mass hypothesis
-                 p.dump((CLs,svals),f) 
+             if savedata==True:
+                 with open(fname+"sim",'w') as f:   #save them in a file identified by the mass hypothesis
+                     p.dump((CLs,svals),f) 
+             else:
+                 print "Warning! Not saving results of CLs curve determination."
            
              return (CLs,svals)
  
@@ -579,8 +715,11 @@ class Experiment:
                  print 's', s, 'cumu. like', sum(likelist), likelist
                  CLsb[i] = sum(likelist)                         
              #Write all these distributions to file
-             with open(fname,'w') as f:   #save them in a file identified by the mass hypothesis
-                 p.dump((CLsb,svals),f) 
+             if savedata:
+                 with open(fname,'w') as f:   #save them in a file identified by the mass hypothesis
+                     p.dump((CLsb,svals),f) 
+             else:
+                 print "Warning! Not saving results of CLs curve determination."
              return (CLsb,svals)
    
          # CLb - CL value assuming Q follows the background-only PDF
@@ -610,18 +749,29 @@ class Experiment:
 
    # Plotting/analysis related routines
 
-   def getCLvals(self,svals,regen,method='marg',N=2000,regenQdist='ifNone'):
+   def getCLvals(self,svals,regen,method='simulate',N=2000,regenQdist='ifNone',savedata=True,simall=True):
       self.CL = {}
       self.CLfunc = {}
       for i,(label,(color,nobs)) in enumerate(self.nlist.items()):
-         if i>0: regenQdist=False #should only have to do this once
+         if (i>0) and (savedata==True): regenQdist=False #should only have to do this once (if data saved...)
          CLvals, svals = self.getCL(fname='{0}/{1}-{2}.pkl'.format(self.outdir,self.name,label),
-                                      n=nobs,svals=svals,regen=regen,method=method,N=N,regenQdist=regenQdist)
+                                      n=nobs,svals=svals,regen=regen,method=method,N=N,
+                                      regenQdist=regenQdist,savedata=savedata, simall=simall)
          self.CL[label] = (svals, CLvals)
          # Create interpolating functions for each observation
-         self.CLfunc[label] = extrap1d(interp.interp1d(svals,CLvals,bounds_error=False,fill_value=0))
+         #self.CLfunc[label] = extrap1d(interp.interp1d(svals,CLvals,bounds_error=False,fill_value=0))
+         # no need for extrap I think
+         self.CLfunc[label] = interp.interp1d(svals,CLvals,bounds_error=False,fill_value=0)
 
-   def plotCL(self,ax=None):
+   # As above, but does it just for a single sval, with no interpolation or saving of results
+   def getCL_direct(self,s,method='simulate',N=2000,nobs=None,simall=True):
+      if nobs==None: nobs=self.o
+      CLvals, svals = self.getCL(fname='{0}/{1}-{2}.pkl'.format(self.outdir,self.name,'tmp'),
+                       n=nobs,svals=np.atleast_1d(s),regen=True,method=method,N=N,
+                       regenQdist=True,savedata=False,simall=simall)
+      return CLvals
+       
+   def plotCL(self,ax=None,scale=1):
       """Plot curves of CL values"""
       if ax==None:
          fig1 = plt.figure(figsize=(6,4))
@@ -631,8 +781,8 @@ class Experiment:
          axCL = ax
       for label,(color,nobs) in self.nlist.items():
          svals, yCL = self.CL[label]
-         axCL.plot(svals,yCL,ls='-',color=color,label=r'$CL$ '+label,alpha=0.7)
-      axCL.plot(svals,[0.05]*len(svals),'k--',label=r'$CL=0.05$')
+         axCL.plot(svals*scale,yCL,ls='-',color=color,label=r'$CL$ '+label,alpha=0.7)
+      axCL.plot(svals*scale,[0.05]*len(svals),'k--',label=r'$CL=0.05$')
       axCL.set_title('CL values for {0}'.format(self.name))
       axCL.set_xlabel('s')
       axCL.set_ylabel('CL')
@@ -648,6 +798,18 @@ class Experiment:
       """Use the CL values calculated for various s hypotheses to interpolate p values onto an array of s values."""
       return self.CLfunc[label](sarray)
 
+   def exp_excluded(self,sarray):
+      """Return True if s > self.explim"""
+      if self.explim==None:
+         raise ValueError("Cannot compare s to explim! No explim has been supplied!")
+      return sarray > self.explim
+ 
+   def obs_excluded(self,sarray):
+      """Return True if s > self.obslim"""
+      if self.obslim==None:
+         raise ValueError("Cannot compare s to obslim! No obslim has been supplied!")
+      return sarray > self.obslim
+ 
    def plot2Dlimit(self,ax,coords,slist,(gridx,gridy),colormap=None):
       """Plot limits resulting from interpolation of 1D list of s hypotheses onto a regular grid
       Args:
@@ -748,10 +910,83 @@ class Experiment:
       """
       print "Determining qCLs(muT={0}) distribution for s={1}...   ".format(muT,s)
 
-      Qsamples = sim.simulate(muT,s,self.b,self.ssys,self.bsystot,N)
+      # Note:
+      # self.sys is the SYSTEMATIC uncertainty on the signal RATE. No `natural' Poisson stuff included
+      # self.bsystot is the uncertainty on the TOTAL YIELD due to the background. Includes the standard Poisson error PLUS other systematics.
+      # The simulator necessarily separates the Poisson error from the error on the rate. So we have to
+      # make sure this happens first. The user is permitted to change the statistical error from the
+      # Poisson amount, so I am here going to move all of this into the systematic parameter, and let
+      # the simulator deal with the Poisson statistics itself.
+      # ( note  (np.sqrt(b)/b)**2 = 1/b )
+      ssys = self.ssys
+      bsys = np.sqrt(self.bsystot**2 - 1/self.b)
+      if bsys<0 or np.isnan(bsys): 
+        #print self.bsystot
+        #print self.bsys
+        #print self.bstat
+        #print bsys
+        #print "Warning, negative background systematic calculated, please check code and inputs... (often just due to rounding error... setting systematic to zero)"
+        bsys=0.
+
+      Qsamples = sim.simulate(muT,s,self.b,ssys,bsys,self.sK,N)
 
       # Possible test statistic values are discrete, so count up occurances of each   
       keys, counts = count_unique(Qsamples)
       normalised_counts = counts/len(Qsamples)
     
-      return (keys,normalised_counts)      
+      return (keys,normalised_counts)     
+
+   def autotune(self,fname,method='simulate'):
+      """Algorithm for automatically tuning systematic uncertainty parameters to optimise fit of 
+      the model likelihood to the observed and expected limits reported by the experiments"""
+     
+      # Parameters to be optimised:
+      # Gaussian systematic uncertainty on signal yield (fractional)
+      #self.ssys = ssys
+      # Signal efficiency scaling factor
+      #self.sK = sK
+    
+      # Record original parameter values so we can be them back how we found them when we are finished.
+      orig_ssys = self.ssys
+      orig_sK = self.sK
+      orig_o = self.o
+      #define function to be minimised
+      def pseudochi2(ssys,sK):
+          """pseudo-chi2 for optimising systematic parameters"""
+          self.ssys = ssys
+          self.sK = sK
+ 
+          # Compute CLs value at the signal value that is supposed to be the observed and expected and limit
+          # Should be as close to 0.05 
+          expCL = self.getCL_direct(s=self.explim,method='simulate',N=100000,nobs=self.b,simall=True)
+          obsCL = self.getCL_direct(s=self.obslim,method='simulate',N=100000,nobs=self.o,simall=True)
+          print 'ssys = {0}; sK {1}'.format(ssys,sK)
+          print 'explim CL: {0}, (target={1})'.format(expCL, 0.05)
+          print 'obslim CL: {0}, (target={1})'.format(obsCL, 0.05)
+
+          return (expCL - 0.05)**2/0.01**2 + (obsCL - 0.05)**2/0.01**2
+  
+      mi = minuit.Minuit(pseudochi2, ssys=self.ssys, err_ssys=0.1, sK=self.sK, err_sK=0.1)
+      print mi.errors
+
+      mi.maxcalls = 100
+      mi.strategy = 2
+      mi.tol = 1
+      mi.up = 1
+      try:
+          mi.simplex() #run Minuit optimisation (migrid seems to ignore error parameters so using simplex)
+      except minuit.MinuitError, err:
+          print "Warning, Minuit encountered a problem: {0}".format(err)
+          print mi.values
+     
+      f = open(fname,"a") 
+      f.write("Optimised values for {0} are: \n".format(self.name))
+      f.write("  ssys = {0}\n".format(mi.values['ssys']))
+      f.write("  sK   = {0}\n".format(mi.values['sK']))
+      f.write("  (pseudo-chi^2 = {0})\n".format(mi.fval))
+      f.close()
+
+      self.ssys = mi.values['ssys'] 
+      self.sK = mi.values['sK']
+  
+      return
